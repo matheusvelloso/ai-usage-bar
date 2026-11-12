@@ -12,7 +12,17 @@ internal sealed class ProviderState
     public DateTimeOffset? LastUpdated { get; set; }
     public UsageException? Error { get; set; }
     public bool IsLoading { get; set; }
-    public DateTimeOffset? BackoffUntil { get; set; }
+    /// <summary>The last request, successful or not.</summary>
+    public DateTimeOffset? LastAttempt { get; set; }
+    public RateLimitBackoff Backoff { get; } = new();
+
+    /// <summary>Waiting out a "too many requests": a notice, not a warning.</summary>
+    public bool IsRateLimited => Error?.IsRateLimit == true;
+
+    /// <summary>An error worth flagging on the tray icon and the tab.</summary>
+    public bool HasWarning => Error is not null && !IsRateLimited;
+
+    public string? MessageFor(ProviderId id, DateTimeOffset? now = null) => Error?.MessageFor(id, Backoff.Until, now);
 }
 
 /// <summary>
@@ -22,11 +32,17 @@ internal sealed class ProviderState
 internal sealed class UsageStore
 {
     public static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(3);
-    public static readonly TimeSpan RateLimitBackoff = TimeSpan.FromMinutes(10);
+    /// <summary>Opening the popup, and every <see cref="OpenTick"/> while it stays open, asks again the agents asked longer ago than this.</summary>
+    public static readonly TimeSpan StaleAfter = TimeSpan.FromMinutes(1);
+    public static readonly TimeSpan OpenTick = TimeSpan.FromSeconds(15);
 
     private readonly IReadOnlyList<IUsageProvider> providers;
     private readonly Dictionary<ProviderId, ProviderState> states = [];
     private DispatcherTimer? timer;
+    /// <summary>Runs while the popup is open.</summary>
+    private DispatcherTimer? openTimer;
+    /// <summary>Asks a rate-limited agent again as soon as its wait ends.</summary>
+    private DispatcherTimer? retryTimer;
     private DateTimeOffset lastTick = DateTimeOffset.Now;
 
     public UsageStore(AppSettings settings, IReadOnlyList<IUsageProvider> providers)
@@ -110,7 +126,7 @@ internal sealed class UsageStore
             (hidden ? Settings.HiddenProviders : Settings.ShownProviders).Add(id.Key());
             UpdateVisibleProviders();
         });
-        _ = RefreshAsync(force: true);
+        _ = RefreshAsync();
     }
 
     /// <summary>One row per supported agent, connected or not, for the Agents tab.</summary>
@@ -170,9 +186,10 @@ internal sealed class UsageStore
 
     public void Start()
     {
-        _ = RefreshAsync(force: true);
+        _ = RefreshAsync();
         // Ticks every 30 s and refreshes every 3 minutes. A tick long after the last one means
-        // the computer slept: then everything is refreshed at once, rate limits included.
+        // the computer slept: then everything is refreshed at once (an agent still waiting out
+        // a rate limit keeps waiting).
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
         var lastRefresh = DateTimeOffset.Now;
         timer.Tick += async (_, _) =>
@@ -183,7 +200,7 @@ internal sealed class UsageStore
             if (!resumed && now - lastRefresh < RefreshInterval) return;
             lastRefresh = now;
             Resumed?.Invoke();
-            await RefreshAsync(force: resumed);
+            await RefreshAsync();
         };
         timer.Start();
     }
@@ -191,27 +208,50 @@ internal sealed class UsageStore
     /// <summary>Raised when a refresh is due, also after the computer wakes up (the updater checks then).</summary>
     public event Action? Resumed;
 
-    /// <summary>Called when the popup opens.</summary>
-    public Task RefreshIfStaleAsync()
+    /// <summary>Refreshes what is stale now and every minute while the popup stays open.</summary>
+    public void PopupOpened()
     {
-        var fresh = VisibleProviders.All(id =>
-            State(id) is { Error: null, LastUpdated: { } updated } && DateTimeOffset.Now - updated < TimeSpan.FromMinutes(1));
-        return fresh ? Task.CompletedTask : RefreshAsync(force: true);
+        _ = RefreshIfStaleAsync();
+        if (openTimer is null)
+        {
+            openTimer = new DispatcherTimer { Interval = OpenTick };
+            openTimer.Tick += async (_, _) => await RefreshIfStaleAsync();
+        }
+        openTimer.Start();
     }
 
-    /// <summary>Also fetches agents that are signed in but not shown yet, so one appears as soon as its usage loads.</summary>
-    public async Task RefreshAsync(bool force)
+    public void PopupClosed() => openTimer?.Stop();
+
+    /// <summary>The agents not asked in the last minute.</summary>
+    public Task RefreshIfStaleAsync()
+    {
+        var now = DateTimeOffset.Now;
+        return RefreshAsync(state => state.LastAttempt is not { } asked || now - asked >= StaleAfter);
+    }
+
+    /// <summary>
+    /// Every agent, except one waiting out a "too many requests": clicking refresh then would only make
+    /// the server wait longer, so its last numbers stay until the wait ends. Also fetches agents that are
+    /// signed in but not shown yet, so one appears as soon as its usage loads.
+    /// </summary>
+    public Task RefreshAsync() => RefreshAsync(_ => true);
+
+    private async Task RefreshAsync(Func<ProviderState, bool> wanted)
     {
         UpdateVisibleProviders();
         var now = DateTimeOffset.Now;
         var candidates = Candidates().Select(p => p.Id).ToHashSet();
         var targets = providers
-            .Where(p => candidates.Contains(p.Id) && !State(p.Id).IsLoading)
-            .Where(p => force || State(p.Id).BackoffUntil is not { } backoff || backoff <= now)
+            .Where(p => candidates.Contains(p.Id)
+                && State(p.Id) is { IsLoading: false } state && !state.Backoff.IsWaiting(now) && wanted(state))
             .ToList();
         if (targets.Count == 0) return;
 
-        foreach (var provider in targets) State(provider.Id).IsLoading = true;
+        foreach (var provider in targets)
+        {
+            State(provider.Id).IsLoading = true;
+            State(provider.Id).LastAttempt = now;
+        }
         Changed?.Invoke();
 
         var results = await Task.WhenAll(targets.Select(async provider =>
@@ -239,17 +279,42 @@ internal sealed class UsageStore
                 state.Snapshot = result.Snapshot;
                 state.LastUpdated = DateTimeOffset.Now;
                 state.Error = null;
-                state.BackoffUntil = null;
+                state.Backoff.Reset();
                 SaveCache(id, result.Cache);
             }
             else
             {
                 state.Error = error;
-                if (error?.Kind == UsageErrorKind.RateLimited) state.BackoffUntil = DateTimeOffset.Now + RateLimitBackoff;
+                if (error is { IsRateLimit: true }) state.Backoff.Record(error.RetryAfter, DateTimeOffset.Now);
             }
         }
+        ScheduleRetry();
         UpdateVisibleProviders();
         Changed?.Invoke();
+    }
+
+    /// <summary>Asks the rate-limited agents again when the first wait ends, instead of at the next 3-minute tick.</summary>
+    private void ScheduleRetry()
+    {
+        retryTimer?.Stop();
+        var now = DateTimeOffset.Now;
+        var waits = states.Values
+            .Where(state => state.IsRateLimited && state.Backoff.IsWaiting(now))
+            .Select(state => state.Backoff.Until!.Value)
+            .ToList();
+        if (waits.Count == 0) return;
+        if (retryTimer is null)
+        {
+            var retry = new DispatcherTimer();
+            retry.Tick += async (_, _) =>
+            {
+                retry.Stop();
+                await RefreshAsync(state => state.IsRateLimited);
+            };
+            retryTimer = retry;
+        }
+        retryTimer.Interval = waits.Min() - now + TimeSpan.FromSeconds(1);
+        retryTimer.Start();
     }
 
     /// <summary>Signed in on this computer and not switched off by the user.</summary>

@@ -44,7 +44,7 @@ internal sealed class PopupViewModel
             SettingsTip = T("Opções", "Options"),
             RefreshVisibility = loading ? Visibility.Collapsed : Visibility.Visible,
             LoadingVisibility = loading ? Visibility.Visible : Visibility.Collapsed,
-            RefreshCommand = new RelayCommand(async () => await store.RefreshAsync(force: true)),
+            RefreshCommand = new RelayCommand(async () => await store.RefreshAsync()),
             Providers = [.. store.VisibleProviders
                 .Where(id => store.ShowsAllProviders || (!onAgents && id.Key() == current))
                 .Select(id => ProviderViewModel.Build(id, store.State(id)))],
@@ -98,7 +98,7 @@ internal sealed record TabViewModel(
         foreach (var id in store.VisibleProviders)
         {
             var state = store.State(id);
-            var summary = TabSummary.Make(state.Snapshot, state.Error is not null, store.Settings.TabLimitFor(id));
+            var summary = TabSummary.Make(state.Snapshot, state.HasWarning, store.Settings.TabLimitFor(id));
             var isCurrent = id.Key() == current;
             var spoken = summary.Text is "!" or "–"
                 ? T("sem dados", "no data")
@@ -288,6 +288,9 @@ internal sealed class ProviderViewModel
     public required ICommand OpenCommand { get; init; }
     public required string? ErrorText { get; init; }
     public required Visibility ErrorVisibility { get; init; }
+    /// <summary>"Too many refreshes": shown without the warning look, above the last numbers.</summary>
+    public required string? NoticeText { get; init; }
+    public required Visibility NoticeVisibility { get; init; }
     public required IReadOnlyList<LimitViewModel> Limits { get; init; }
     public required IReadOnlyList<string> Notes { get; init; }
     public required string BreakdownHeader { get; init; }
@@ -307,8 +310,10 @@ internal sealed class ProviderViewModel
             PlanVisibility = snapshot?.PlanName is null ? Visibility.Collapsed : Visibility.Visible,
             OpenTip = id.Descriptor().OpenTip(),
             OpenCommand = new RelayCommand(() => InstalledApps.Open(id)),
-            ErrorText = state.Error?.MessageFor(id),
-            ErrorVisibility = state.Error is null ? Visibility.Collapsed : Visibility.Visible,
+            ErrorText = state.HasWarning ? state.MessageFor(id) : null,
+            ErrorVisibility = state.HasWarning ? Visibility.Visible : Visibility.Collapsed,
+            NoticeText = state.IsRateLimited ? state.MessageFor(id) : null,
+            NoticeVisibility = state.IsRateLimited ? Visibility.Visible : Visibility.Collapsed,
             Limits = [.. (snapshot?.Items ?? []).Select(LimitViewModel.Build)],
             Notes = [.. (snapshot?.Notes ?? []).Select(note => "ⓘ  " + note.Text)],
             BreakdownHeader = T("ONDE FOI O USO DA SEMANA", "WHERE THIS WEEK’S USAGE WENT"),

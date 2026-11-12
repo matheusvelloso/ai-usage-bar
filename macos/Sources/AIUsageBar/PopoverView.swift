@@ -81,7 +81,7 @@ struct PopoverView: View {
                 ProgressView().controlSize(.small)
             } else {
                 Button {
-                    Task { await store.refresh(force: true) }
+                    Task { await store.refresh() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
@@ -188,8 +188,13 @@ private struct ProviderSection: View {
                 .help(provider.openHelp)
             }
 
-            if let error = state.error {
-                ErrorBanner(text: error.message(for: provider))
+            if state.isRateLimited {
+                // The wait counts down while the popover stays open.
+                TimelineView(.periodic(from: .now, by: 15)) { context in
+                    NoticeBanner(text: state.message(for: provider, now: context.date) ?? "")
+                }
+            } else if let message = state.message(for: provider) {
+                ErrorBanner(text: message)
             }
 
             if let snapshot = state.snapshot {
@@ -324,7 +329,7 @@ private struct TabStrip: View {
 
     private func agentTab(_ id: ProviderID) -> some View {
         let state = store.state(for: id)
-        let summary = TabSummary.make(snapshot: state.snapshot, hasError: state.error != nil, limit: store.tabLimit(for: id))
+        let summary = TabSummary.make(snapshot: state.snapshot, hasError: state.hasWarning, limit: store.tabLimit(for: id))
         let selected = store.currentTab == id.rawValue
         let status = summary.isWarning && summary.text != "!" ? summary.text + " ⚠" : summary.text
         let statusColor: Color = summary.text == "–"
@@ -568,6 +573,24 @@ private struct ErrorBanner: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+/// "Too many refreshes": not an error, the last numbers stay and the app asks again by itself.
+private struct NoticeBanner: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "clock")
+                .foregroundStyle(.secondary)
+            Text(text)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

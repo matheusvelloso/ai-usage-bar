@@ -119,7 +119,7 @@ struct CLICommand {
             store = UsageStore(preview: snapshots)
         } else {
             store = UsageStore()
-            await store.refresh(force: true)
+            await store.refresh()
         }
 
         if let language { AppLanguage.current = language }

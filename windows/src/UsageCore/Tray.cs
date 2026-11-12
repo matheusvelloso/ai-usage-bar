@@ -42,7 +42,8 @@ public sealed record TraySegment(ProviderId Provider, double? RingPercent, Sever
     /// <summary>Windows truncates tray tooltips at 127 characters.</summary>
     public const int TooltipLimit = 127;
 
-    public static TraySegment? Make(ProviderId provider, TrayDisplay display, ProviderSnapshot? snapshot, string? error)
+    /// <summary><paramref name="isNotice"/>: <paramref name="error"/> is the "too many refreshes" notice, not a warning.</summary>
+    public static TraySegment? Make(ProviderId provider, TrayDisplay display, ProviderSnapshot? snapshot, string? error, bool isNotice = false)
     {
         if (display == TrayDisplay.Hidden) return null;
 
@@ -50,7 +51,7 @@ public sealed record TraySegment(ProviderId Provider, double? RingPercent, Sever
         if (items.Count == 0)
         {
             var status = error ?? T("Carregando…", "Loading…");
-            return new TraySegment(provider, null, Severity.Normal, error is null ? "–" : "!", Clip($"{provider.DisplayName()}: {status}"));
+            return new TraySegment(provider, null, Severity.Normal, error is null || isNotice ? "–" : "!", Clip($"{provider.DisplayName()}: {status}"));
         }
 
         var session = items.FirstOrDefault(i => i.Group == LimitGroup.Session);
@@ -60,7 +61,7 @@ public sealed record TraySegment(ProviderId Provider, double? RingPercent, Sever
 
         var lines = new List<string> { provider.DisplayName() };
         lines.AddRange(items.Select(i => $"{i.Title}: {UsageFormat.Percent(i.Percent)}"));
-        if (error is not null) lines.Add("⚠ " + error);
+        if (error is not null) lines.Add((isNotice ? "ⓘ " : "⚠ ") + error);
         return new TraySegment(provider, shown.Percent, shown.Severity, FormatNumber(shown.Percent), Clip(string.Join('\n', lines)));
     }
 

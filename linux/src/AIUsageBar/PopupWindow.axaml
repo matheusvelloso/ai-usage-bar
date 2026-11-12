@@ -161,6 +161,16 @@
                                         </DockPanel>
                                     </Border>
 
+                                    <!-- "Too many refreshes": not an error, the last numbers stay below. -->
+                                    <Border Margin="0,8,0,0" Padding="10,8" CornerRadius="6" Background="{DynamicResource BadgeBackground}"
+                                            IsVisible="{Binding NoticeVisible}">
+                                        <DockPanel>
+                                            <PathIcon DockPanel.Dock="Left" VerticalAlignment="Top" Margin="0,1,8,0" Width="14" Height="14"
+                                                      Data="{x:Static local:Icons.Clock}" Foreground="{DynamicResource SecondaryText}" />
+                                            <TextBlock Text="{Binding NoticeText}" TextWrapping="Wrap" FontSize="12" />
+                                        </DockPanel>
+                                    </Border>
+
                                     <TextBlock Margin="0,8,0,0" Text="{Binding LoadingText}" Foreground="{DynamicResource SecondaryText}"
                                                IsVisible="{Binding LoadingVisible}" />
 

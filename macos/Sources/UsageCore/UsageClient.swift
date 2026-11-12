@@ -6,12 +6,20 @@ public enum UsageError: Error, Equatable, Sendable {
     case keychainDenied
     /// The login is stored but could not be read just now (Cursor's database was busy).
     case loginUnreadable
-    case rateLimited
+    /// Too many requests (HTTP 429). `retryAfter`: the server's own wait, in seconds, when it sent one.
+    case rateLimited(retryAfter: TimeInterval?)
     case http(Int)
     case network(String)
     case decoding
 
-    public func message(for provider: ProviderID) -> String {
+    /// A friendly notice rather than an error: the last numbers stay and the app asks again by itself.
+    public var isRateLimit: Bool {
+        if case .rateLimited = self { return true }
+        return false
+    }
+
+    /// `retryAt`: when a rate-limited agent is asked again (`RateLimitBackoff.until`).
+    public func message(for provider: ProviderID, retryAt: Date? = nil, now: Date = Date()) -> String {
         let app = provider.loginSource
         switch self {
         case .notLoggedIn:
@@ -68,7 +76,7 @@ public enum UsageError: Error, Equatable, Sendable {
                 "Could not read the \(app) login right now. Trying again soon."
             )
         case .rateLimited:
-            return tr("Muitas consultas seguidas. Tento de novo em 10 minutos.", "Too many requests. Trying again in 10 minutes.")
+            return RateLimitBackoff.message(until: retryAt, now: now)
         case .http(let code):
             return tr("O servidor respondeu com erro \(code). Tento de novo em breve.", "The server returned error \(code). Trying again soon.")
         case .network:
@@ -92,12 +100,23 @@ enum HTTP {
             throw UsageError.network(error.localizedDescription)
         }
         let (data, response) = result
-        let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+        let http = response as? HTTPURLResponse
+        let status = http?.statusCode ?? -1
+        if (200..<300).contains(status) { return data }
+        throw failure(status: status, header: { http?.value(forHTTPHeaderField: $0) })
+    }
+
+    /// The error for a failed response; `header` looks a response header up by name.
+    static func failure(status: Int, header: (String) -> String?, now: Date = Date()) -> UsageError {
+        let retryAfter = header("Retry-After")
+        let remaining = header("x-ratelimit-remaining")
+        if RateLimitBackoff.isRateLimit(status: status, retryAfter: retryAfter, remaining: remaining) {
+            let wait = RateLimitBackoff.serverWait(retryAfter: retryAfter, remaining: remaining, reset: header("x-ratelimit-reset"), now: now)
+            return .rateLimited(retryAfter: wait)
+        }
         switch status {
-        case 200..<300: return data
-        case 401, 403: throw UsageError.unauthorized(expired: false)
-        case 429: throw UsageError.rateLimited
-        default: throw UsageError.http(status)
+        case 401, 403: return .unauthorized(expired: false)
+        default: return .http(status)
         }
     }
 }

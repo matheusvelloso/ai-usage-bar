@@ -85,7 +85,7 @@ public partial class App : System.Windows.Application
         {
             Dispatcher.InvokeAsync(() =>
             {
-                _ = store.RefreshAsync(force: true);
+                _ = store.RefreshAsync();
                 updater?.CheckIfStale();
             });
         }
