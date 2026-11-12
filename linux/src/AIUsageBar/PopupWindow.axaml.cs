@@ -90,7 +90,7 @@ public partial class PopupWindow : Window
         Activate();
         Dispatcher.UIThread.Post(() => { if (IsVisible) Place(anchor); }, DispatcherPriority.Loaded);
         clock.Start();
-        _ = store.RefreshIfStaleAsync();
+        store.PopupOpened();
         updater.CheckIfStale();
     }
 
@@ -165,6 +165,7 @@ public partial class PopupWindow : Window
         Hide();
         lastHidden = DateTime.Now;
         clock.Stop();
+        store.PopupClosed();
         Notice = null;
     }
 

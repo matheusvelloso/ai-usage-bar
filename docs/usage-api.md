@@ -44,10 +44,10 @@ Accept: application/json
 |---|---|
 | 200 | Decode, show and cache |
 | 401 / 403 | Invalid or expired login (compare `expiresAt` with the current time to pick the message) |
-| 429 | Wait 10 minutes before trying again |
+| 429, or a 403 with `Retry-After` or `x-ratelimit-remaining: 0` (GitHub) | Too many requests: keep the last numbers on screen with a notice, not an error. Wait the `Retry-After` (seconds or an HTTP date; GitHub's `x-ratelimit-reset` when the quota is used up), kept between 15 s and 1 hour; without one, 1 minute, doubling with each 429 in a row up to 10 minutes. A successful response resets it. Nothing asks that agent during the wait, the refresh button included, and it is asked again as soon as the wait ends |
 | other | Show an error and try on the next cycle |
 
-Refresh cadence on the Mac: every 3 minutes, when the popover opens (if the data is older than 60 s) and when the computer wakes up.
+Refresh cadence (the same in the three apps): every 3 minutes; when the popover opens, the agents not asked in the last 60 s; every minute while it stays open; and when the computer wakes up.
 
 ## 3. Claude: response
 

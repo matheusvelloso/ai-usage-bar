@@ -44,7 +44,7 @@ internal sealed class PopupViewModel
             SettingsTip = T("Opções", "Options"),
             RefreshVisible = !loading,
             LoadingVisible = loading,
-            RefreshCommand = new RelayCommand(async () => await store.RefreshAsync(force: true)),
+            RefreshCommand = new RelayCommand(async () => await store.RefreshAsync()),
             Providers = [.. store.VisibleProviders
                 .Where(id => store.ShowsAllProviders || (!onAgents && id.Key() == current))
                 .Select(id => ProviderViewModel.Build(id, store.State(id)))],
@@ -101,7 +101,7 @@ internal sealed record TabViewModel(
         foreach (var id in store.VisibleProviders)
         {
             var state = store.State(id);
-            var summary = TabSummary.Make(state.Snapshot, state.Error is not null, store.Settings.TabLimitFor(id));
+            var summary = TabSummary.Make(state.Snapshot, state.HasWarning, store.Settings.TabLimitFor(id));
             var isCurrent = id.Key() == current;
             var spoken = summary.Text is "!" or "–"
                 ? T("sem dados", "no data")
@@ -285,6 +285,9 @@ internal sealed class ProviderViewModel
     public required ICommand OpenCommand { get; init; }
     public required string? ErrorText { get; init; }
     public required bool ErrorVisible { get; init; }
+    /// <summary>"Too many refreshes": shown without the warning look, above the last numbers.</summary>
+    public required string? NoticeText { get; init; }
+    public required bool NoticeVisible { get; init; }
     public required IReadOnlyList<LimitViewModel> Limits { get; init; }
     public required IReadOnlyList<string> Notes { get; init; }
     public required string BreakdownHeader { get; init; }
@@ -304,8 +307,10 @@ internal sealed class ProviderViewModel
             PlanVisible = snapshot?.PlanName is not null,
             OpenTip = id.Descriptor().OpenTip(),
             OpenCommand = new RelayCommand(() => InstalledApps.Open(id)),
-            ErrorText = state.Error?.MessageFor(id),
-            ErrorVisible = state.Error is not null,
+            ErrorText = state.HasWarning ? state.MessageFor(id) : null,
+            ErrorVisible = state.HasWarning,
+            NoticeText = state.IsRateLimited ? state.MessageFor(id) : null,
+            NoticeVisible = state.IsRateLimited,
             Limits = [.. (snapshot?.Items ?? []).Select(LimitViewModel.Build)],
             Notes = [.. (snapshot?.Notes ?? []).Select(note => note.Text)],
             BreakdownHeader = T("ONDE FOI O USO DA SEMANA", "WHERE THIS WEEK’S USAGE WENT"),

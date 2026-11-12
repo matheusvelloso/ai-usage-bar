@@ -43,7 +43,7 @@ internal sealed class TrayController : IDisposable
         var darkPanel = Theme.PanelIsDark(store.Settings.IconColor);
         var wanted = store.VisibleProviders
             .Select(id => (Id: id, Segment: TraySegment.Make(
-                id, store.Settings.DisplayFor(id), store.State(id).Snapshot, store.State(id).Error?.MessageFor(id))))
+                id, store.Settings.DisplayFor(id), store.State(id).Snapshot, store.State(id).MessageFor(id), store.State(id).IsRateLimited)))
             .Where(entry => entry.Segment is not null)
             .ToList();
 
@@ -126,7 +126,7 @@ internal sealed class TrayController : IDisposable
         return
         [
             Item(T("Abrir", "Open"), () => popup.ShowNearPointer()),
-            Item(T("Atualizar agora", "Refresh now"), () => _ = store.RefreshAsync(force: true)),
+            Item(T("Atualizar agora", "Refresh now"), () => _ = store.RefreshAsync()),
             new NativeMenuItemSeparator(),
             Item(T("Sair do medidor", "Quit"), Quit),
         ];

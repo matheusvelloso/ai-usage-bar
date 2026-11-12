@@ -67,16 +67,28 @@ internal static class Http
         }
         using (response)
         {
-            var status = (int)response.StatusCode;
             if (response.IsSuccessStatusCode) return await response.Content.ReadAsByteArrayAsync(cancellation).ConfigureAwait(false);
-            throw response.StatusCode switch
-            {
-                HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => new UsageException(UsageErrorKind.Unauthorized, status),
-                HttpStatusCode.TooManyRequests => new UsageException(UsageErrorKind.RateLimited, status),
-                _ => new UsageException(UsageErrorKind.Http, status),
-            };
+            throw Failure((int)response.StatusCode, name => Header(response, name), DateTimeOffset.Now);
         }
     }
+
+    /// <summary>The error for a failed response; <paramref name="header"/> looks a response header up by name.</summary>
+    public static UsageException Failure(int status, Func<string, string?> header, DateTimeOffset now)
+    {
+        var retryAfter = header("Retry-After");
+        var remaining = header("x-ratelimit-remaining");
+        if (RateLimitBackoff.IsRateLimit(status, retryAfter, remaining))
+        {
+            var wait = RateLimitBackoff.ServerWait(retryAfter, remaining, header("x-ratelimit-reset"), now);
+            return new UsageException(UsageErrorKind.RateLimited, status, retryAfter: wait);
+        }
+        return status is (int)HttpStatusCode.Unauthorized or (int)HttpStatusCode.Forbidden
+            ? new UsageException(UsageErrorKind.Unauthorized, status)
+            : new UsageException(UsageErrorKind.Http, status);
+    }
+
+    private static string? Header(HttpResponseMessage response, string name) =>
+        response.Headers.TryGetValues(name, out var values) ? values.FirstOrDefault() : null;
 }
 
 public sealed class ClaudeProvider(string? credentialsPath = null) : IUsageProvider

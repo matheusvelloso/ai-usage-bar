@@ -46,14 +46,14 @@ final class AgentVisibilityTests: XCTestCase {
     func testShowsOnlyAgentsWhoseUsageLoads() async {
         let store = makeStore()
         XCTAssertEqual(store.visibleProviders, [], "nothing is shown before the first answer")
-        await store.refresh(force: true)
+        await store.refresh()
         XCTAssertEqual(store.visibleProviders, [.claude])
         XCTAssertFalse(store.hasError, "an agent that never worked does not raise a warning")
     }
 
     func testAgentsTabExplainsEachState() async {
         let store = makeStore()
-        await store.refresh(force: true)
+        await store.refresh()
         let rows = Dictionary(uniqueKeysWithValues: store.agentRows.map { ($0.id, $0) })
         XCTAssertEqual(rows[.claude]?.status, .connected)
         XCTAssertEqual(rows[.claude]?.hasData, true)
@@ -66,10 +66,10 @@ final class AgentVisibilityTests: XCTestCase {
 
     func testTickingShowKeepsAnAgentThatFails() async {
         let store = makeStore()
-        await store.refresh(force: true)
+        await store.refresh()
         store.setProviderHidden(.copilot, false)
         XCTAssertEqual(store.visibleProviders, [.claude, .copilot])
-        await store.refresh(force: true)
+        await store.refresh()
         XCTAssertTrue(store.hasError, "a shown agent that fails shows its warning")
 
         // The choice survives a restart.

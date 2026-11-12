@@ -17,13 +17,22 @@ public enum UsageErrorKind
     Decoding,
 }
 
-public sealed class UsageException(UsageErrorKind kind, int statusCode = 0, Exception? inner = null)
+public sealed class UsageException(UsageErrorKind kind, int statusCode = 0, Exception? inner = null, TimeSpan? retryAfter = null)
     : Exception(kind.ToString(), inner)
 {
     public UsageErrorKind Kind { get; } = kind;
     public int StatusCode { get; } = statusCode;
+    /// <summary>For <see cref="UsageErrorKind.RateLimited"/>: the server's own wait, when it sent one.</summary>
+    public TimeSpan? RetryAfter { get; } = retryAfter;
 
-    public string MessageFor(ProviderId provider) => Describe(Kind, provider, StatusCode);
+    /// <summary>A friendly notice rather than an error: the last numbers stay and the app asks again by itself.</summary>
+    public bool IsRateLimit => Kind == UsageErrorKind.RateLimited;
+
+    /// <summary><paramref name="retryAt"/>: when a rate-limited agent is asked again (<see cref="RateLimitBackoff.Until"/>).</summary>
+    public string MessageFor(ProviderId provider, DateTimeOffset? retryAt = null, DateTimeOffset? now = null) =>
+        Kind == UsageErrorKind.RateLimited
+            ? RateLimitBackoff.Message(retryAt, now ?? DateTimeOffset.Now)
+            : Describe(Kind, provider, StatusCode);
 
     public static string Describe(UsageErrorKind kind, ProviderId provider, int statusCode = 0)
     {
@@ -63,9 +72,7 @@ public sealed class UsageException(UsageErrorKind kind, int statusCode = 0, Exce
             UsageErrorKind.LoginUnreadable => T(
                 $"Não consegui ler o login do {app} agora. Tento de novo em breve.",
                 $"Could not read the {app} login right now. Trying again soon."),
-            UsageErrorKind.RateLimited => T(
-                "Muitas consultas seguidas. Tento de novo em 10 minutos.",
-                "Too many requests. Trying again in 10 minutes."),
+            UsageErrorKind.RateLimited => RateLimitBackoff.Message(null, DateTimeOffset.Now),
             UsageErrorKind.Http => T(
                 $"O servidor respondeu com erro {statusCode}. Tento de novo em breve.",
                 $"The server returned error {statusCode}. Trying again soon."),

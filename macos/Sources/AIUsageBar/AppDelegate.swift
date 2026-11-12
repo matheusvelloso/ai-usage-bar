@@ -36,7 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.notificationCenter
             .publisher(for: NSWorkspace.didWakeNotification)
             .sink { [weak store, weak updater] _ in
-                Task { await store?.refresh(force: true) }
+                Task { await store?.refresh() }
                 updater?.checkIfStale()
             }
             .store(in: &cancellables)
@@ -67,6 +67,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
         self.popover = popover
+        NotificationCenter.default
+            .publisher(for: NSPopover.didCloseNotification, object: popover)
+            .sink { [weak store] _ in store?.popoverDidClose() }
+            .store(in: &cancellables)
     }
 
     @objc private func togglePopover(_ sender: Any?) {
@@ -82,7 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
-        Task { await store?.refreshIfStale() }
+        store?.popoverDidOpen()
         updater?.checkIfStale()
     }
 

@@ -91,7 +91,7 @@ public partial class PopupWindow : Window
 
         Activate();
         clock.Start();
-        _ = store.RefreshIfStaleAsync();
+        store.PopupOpened();
         updater.CheckIfStale();
     }
 
@@ -147,6 +147,7 @@ public partial class PopupWindow : Window
         Hide();
         lastHidden = DateTime.Now;
         clock.Stop();
+        store.PopupClosed();
     }
 
     private void OnSettingsClick(object sender, RoutedEventArgs e)

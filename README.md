@@ -213,7 +213,7 @@ dotnet run --project src/AIUsageBar                    # run from source
 
 ## How it works
 
-Each service is a provider (`UsageProvider`) that reads the login of an app that is already installed and calls the same endpoint that app uses for its own usage screen. It refreshes every 3 minutes, when the popover opens and when the Mac wakes up. The last response is cached so something shows up as soon as the app starts.
+Each service is a provider (`UsageProvider`) that reads the login of an app that is already installed and calls the same endpoint that app uses for its own usage screen. It refreshes every 3 minutes, when the popover opens (the agents not checked in the last minute), every minute while it stays open, and when the Mac wakes up. When a service answers "too many requests" (HTTP 429), the last numbers stay on screen with a notice and that agent waits 1 minute before it is asked again: 2, 4, 8 and at most 10 minutes if it keeps happening, or the server's `Retry-After` when it sends one. The refresh button does not skip that wait. The last response is cached so something shows up as soon as the app starts.
 
 | Service | Login reused | Endpoint |
 |---|---|---|

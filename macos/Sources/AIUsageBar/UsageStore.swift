@@ -8,7 +8,18 @@ final class UsageStore: ObservableObject {
         var lastUpdated: Date?
         var error: UsageError?
         var isLoading = false
-        var backoffUntil: Date?
+        /// The last request, successful or not.
+        var lastAttempt: Date?
+        var backoff = RateLimitBackoff()
+
+        /// Waiting out a "too many requests": a notice, not a warning.
+        var isRateLimited: Bool { error?.isRateLimit ?? false }
+        /// An error worth flagging in the menu bar and on the tab.
+        var hasWarning: Bool { error != nil && !isRateLimited }
+
+        func message(for id: ProviderID, now: Date = Date()) -> String? {
+            error?.message(for: id, retryAt: backoff.until, now: now)
+        }
     }
 
     @Published private(set) var states: [ProviderID: ProviderState] = [:]
@@ -44,13 +55,21 @@ final class UsageStore: ObservableObject {
     }
 
     static let refreshInterval: TimeInterval = 180
-    static let rateLimitBackoff: TimeInterval = 600
+    /// Opening the popover, and every `openTick` while it stays open, asks again the agents asked longer ago than this.
+    static let staleAfter: TimeInterval = 60
+    static let openTick: TimeInterval = 15
 
     private let providers: [any UsageProvider]
     private let defaults: UserDefaults
     /// `--snapshot` changes settings to draw them; those changes are not saved.
     private var isPreview = false
     private var timer: Timer?
+    /// Runs while the popover is open.
+    private var openTimer: Timer?
+    /// Asks a rate-limited agent again as soon as its wait ends.
+    private var retryTimer: Timer?
+    /// The current time; tests move it forward.
+    var clock: () -> Date = { Date() }
 
     private enum Keys {
         /// Settings from versions 0.1 and 0.2 that no longer apply.
@@ -209,7 +228,7 @@ final class UsageStore: ObservableObject {
         defaults.set(Array(hiddenProviders), forKey: Keys.hiddenProviders)
         defaults.set(Array(shownProviders), forKey: Keys.shownProviders)
         updateVisibleProviders()
-        Task { await refresh(force: true) }
+        Task { await refresh() }
     }
 
     /// One row per supported agent, connected or not, for the Agents tab.
@@ -267,7 +286,7 @@ final class UsageStore: ObservableObject {
                 provider: id,
                 display: menuBarDisplay(for: id),
                 snapshot: state.snapshot,
-                hasError: state.error != nil
+                hasError: state.hasWarning
             )
         }
     }
@@ -286,8 +305,9 @@ final class UsageStore: ObservableObject {
         visibleProviders.contains { state(for: $0).isLoading }
     }
 
+    /// A visible agent has an error other than waiting out a rate limit.
     var hasError: Bool {
-        visibleProviders.contains { state(for: $0).error != nil }
+        visibleProviders.contains { state(for: $0).hasWarning }
     }
 
     /// The oldest successful update, so a stale service is not hidden.
@@ -299,7 +319,7 @@ final class UsageStore: ObservableObject {
         let lines = visibleProviders.flatMap { id -> [String] in
             let state = state(for: id)
             guard let snapshot = state.snapshot else {
-                return state.error.map { ["\(id.displayName): \($0.message(for: id))"] } ?? []
+                return state.message(for: id, now: clock()).map { ["\(id.displayName): \($0)"] } ?? []
             }
             return snapshot.items.map { "\(id.displayName) · \($0.title): \(UsageFormat.percent($0.percent))" }
         }
@@ -309,7 +329,7 @@ final class UsageStore: ObservableObject {
     // MARK: Refreshing
 
     func start() {
-        Task { await refresh(force: true) }
+        Task { await refresh() }
         timer?.invalidate()
         let timer = Timer(timeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.refresh() }
@@ -319,29 +339,51 @@ final class UsageStore: ObservableObject {
         self.timer = timer
     }
 
-    /// Called when the popover opens.
-    func refreshIfStale() async {
-        let fresh = visibleProviders.allSatisfy { id in
-            let state = state(for: id)
-            guard state.error == nil, let updated = state.lastUpdated else { return false }
-            return Date().timeIntervalSince(updated) < 60
+    /// Refreshes what is stale now and every minute while the popover stays open.
+    func popoverDidOpen() {
+        Task { await refreshIfStale() }
+        openTimer?.invalidate()
+        let timer = Timer(timeInterval: Self.openTick, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.refreshIfStale() }
         }
-        if !fresh { await refresh(force: true) }
+        timer.tolerance = 2
+        RunLoop.main.add(timer, forMode: .common)
+        openTimer = timer
     }
 
+    func popoverDidClose() {
+        openTimer?.invalidate()
+        openTimer = nil
+    }
+
+    /// The agents not asked in the last minute.
+    func refreshIfStale() async {
+        let now = clock()
+        await refresh { state in
+            state.lastAttempt.map { now.timeIntervalSince($0) >= Self.staleAfter } ?? true
+        }
+    }
+
+    /// Every agent, except one waiting out a "too many requests": clicking refresh then
+    /// would only make the server wait longer, so its last numbers stay until the wait ends.
     /// Also fetches agents that are signed in but not shown yet, so one appears as soon as its usage loads.
-    func refresh(force: Bool = false) async {
+    func refresh() async {
+        await refresh { _ in true }
+    }
+
+    private func refresh(where wanted: (ProviderState) -> Bool) async {
         updateVisibleProviders()
-        let now = Date()
+        let now = clock()
         let candidates = Set(candidateProviders.map(\.id))
         let targets = providers.filter { provider in
             let state = state(for: provider.id)
-            guard candidates.contains(provider.id), !state.isLoading else { return false }
-            if !force, let backoff = state.backoffUntil, backoff > now { return false }
-            return true
+            return candidates.contains(provider.id) && !state.isLoading && !state.backoff.isWaiting(now: now) && wanted(state)
         }
         guard !targets.isEmpty else { return }
-        for provider in targets { states[provider.id, default: ProviderState()].isLoading = true }
+        for provider in targets {
+            states[provider.id, default: ProviderState()].isLoading = true
+            states[provider.id]?.lastAttempt = now
+        }
 
         await withTaskGroup(of: (ProviderID, Result<ProviderFetchResult, Error>).self) { group in
             for provider in targets {
@@ -354,6 +396,7 @@ final class UsageStore: ObservableObject {
                 apply(result, to: id)
             }
         }
+        scheduleRetry()
         updateVisibleProviders()
     }
 
@@ -362,21 +405,36 @@ final class UsageStore: ObservableObject {
         state.isLoading = false
         switch result {
         case .success(let fetched):
-            let now = Date()
+            let now = clock()
             state.snapshot = fetched.snapshot
             state.lastUpdated = now
             state.error = nil
-            state.backoffUntil = nil
+            state.backoff.reset()
             defaults.set(fetched.cache, forKey: Keys.cache(id))
             defaults.set(now, forKey: Keys.cachedAt(id))
         case .failure(let error):
             let usageError = (error as? UsageError) ?? .decoding
             state.error = usageError
-            if usageError == .rateLimited {
-                state.backoffUntil = Date().addingTimeInterval(Self.rateLimitBackoff)
+            if case .rateLimited(let retryAfter) = usageError {
+                state.backoff.record(serverWait: retryAfter, now: clock())
             }
         }
         states[id] = state
+    }
+
+    /// Asks the rate-limited agents again when the first wait ends, instead of at the next 3-minute tick.
+    private func scheduleRetry() {
+        retryTimer?.invalidate()
+        retryTimer = nil
+        let now = clock()
+        guard let next = states.values.filter({ $0.isRateLimited && $0.backoff.isWaiting(now: now) }).compactMap(\.backoff.until).min()
+        else { return }
+        let timer = Timer(timeInterval: next.timeIntervalSince(now) + 1, repeats: false) { [weak self] _ in
+            Task { @MainActor in await self?.refresh { $0.isRateLimited } }
+        }
+        timer.tolerance = 5
+        RunLoop.main.add(timer, forMode: .common)
+        retryTimer = timer
     }
 
     /// Signed in on this computer and not switched off by the user.
@@ -415,7 +473,7 @@ final class UsageStore: ObservableObject {
             let state = state(for: id)
             lines.append("== \(id.displayName)\(state.snapshot?.planName.map { " (\($0))" } ?? "")")
             if let updated = state.lastUpdated { lines.append(UsageFormat.updated(updated)) }
-            if let error = state.error { lines.append(tr("Aviso: ", "Warning: ") + error.message(for: id)) }
+            if let message = state.message(for: id, now: clock()) { lines.append(tr("Aviso: ", "Warning: ") + message) }
             for item in state.snapshot?.items ?? [] {
                 let reset = item.resetsAt.map { " — \(UsageFormat.reset($0))" } ?? ""
                 lines.append("• \(item.title): \(UsageFormat.percent(item.percent)) [\(item.severity)]\(reset)")

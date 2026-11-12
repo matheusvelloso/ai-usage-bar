@@ -114,6 +114,16 @@
                         </DockPanel>
                     </Border>
 
+                    <!-- "Too many refreshes": not an error, the last numbers stay below. -->
+                    <Border Margin="0,8,0,0" Padding="10,8" CornerRadius="6" Background="{DynamicResource BadgeBackground}"
+                            Visibility="{Binding NoticeVisibility}">
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Left" Margin="0,1,8,0" FontFamily="{StaticResource IconFont}"
+                                       Text="&#xE823;" Foreground="{DynamicResource SecondaryText}" />
+                            <TextBlock Text="{Binding NoticeText}" TextWrapping="Wrap" FontSize="12" />
+                        </DockPanel>
+                    </Border>
+
                     <TextBlock Margin="0,8,0,0" Text="{Binding LoadingText}" Foreground="{DynamicResource SecondaryText}"
                                Visibility="{Binding LoadingVisibility}" />
 

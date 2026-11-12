@@ -213,7 +213,7 @@ O `build.sh` baixa o [appimagetool](https://github.com/AppImage/appimagetool) na
 
 ## Como funciona
 
-Cada serviço é um "provedor" (`UsageProvider`) que lê o login de um app já instalado e consulta o mesmo endpoint que esse app usa na própria tela de uso. A consulta acontece a cada 3 minutos, ao abrir o pop-up e quando o Mac acorda. A última resposta fica salva para aparecer na hora em que o app abre.
+Cada serviço é um "provedor" (`UsageProvider`) que lê o login de um app já instalado e consulta o mesmo endpoint que esse app usa na própria tela de uso. A consulta acontece a cada 3 minutos, ao abrir o pop-up (para os agentes não consultados no último minuto), a cada minuto enquanto ele fica aberto e quando o Mac acorda. Quando um serviço responde "muitas requisições" (HTTP 429), os últimos números continuam na tela com um aviso e aquele agente espera 1 minuto antes da próxima consulta: 2, 4, 8 e no máximo 10 minutos se continuar acontecendo, ou o tempo do `Retry-After` quando o servidor manda um. O botão de atualizar não pula essa espera. A última resposta fica salva para aparecer na hora em que o app abre.
 
 | Serviço | Login reaproveitado | Endpoint |
 |---|---|---|
